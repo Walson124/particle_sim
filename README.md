@@ -39,7 +39,7 @@ dependencies, relative asset paths). You can upload it as-is:
 
 - **Cloudflare Workers**: `wrangler.jsonc` defines a static-assets-only Worker serving `dist/`.
   Run `npx wrangler login` once, then `npm run deploy` (builds, then deploys) and open
-  `https://particle-breach.<your-subdomain>.workers.dev`.
+  `https://particle-sim.<your-subdomain>.workers.dev` (live: https://particle-sim.walson124.workers.dev).
 - **GitHub Pages**: push `dist/` to a `gh-pages` branch, or use the official Pages action with
   `path: dist`.
 - **Netlify / Cloudflare Pages / Vercel**: build command `npm run build`, output directory `dist`.
