@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Particle Breach</title>
+    <meta name="description" content="Real-time WebGPU particle simulation: slash a sandbag, rice sack or body and watch it spill." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2213%22 fill=%22%23c9a46a%22/%3E%3Ccircle cx=%2211%22 cy=%2212%22 r=%223%22 fill=%22%23fff%22 opacity=%22.5%22/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="gpu"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="hud">
+      <div id="stats">starting…</div>
+      <div id="help">Drag to slash · Click to puncture · Right-drag / two fingers to orbit · Middle-drag to pan · Scroll to zoom · <b>R</b> reset · <b>Space</b> pause</div>
+    </div>
+    <div id="error" hidden></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

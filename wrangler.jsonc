@@ -1,0 +1,9 @@
+// Cloudflare Workers deployment: an assets-only Worker serving the Vite build in dist/.
+//   npm run deploy        (builds, then `wrangler deploy`)
+{
+  "name": "particle-breach",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
