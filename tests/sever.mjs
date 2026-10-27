@@ -16,7 +16,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const probe = () => page.evaluate(async () => {
   const sim = window.__sim, d = sim.device, N = sim.N;
   const enc = d.createCommandEncoder();
-  const bufs = [[sim.buf.pos, 16], [sim.buf.prev, 16], [sim.buf.sleep, 4]].map(([b, bytes]) => {
+  const bufs = [[sim.buf.pos, 16], [sim.buf.prev, 16], [sim.buf.sleep, 16]].map(([b, bytes]) => {
     const s = d.createBuffer({ size: N * bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     enc.copyBufferToBuffer(b, 0, s, 0, N * bytes);
     return s;
@@ -35,17 +35,17 @@ const probe = () => page.evaluate(async () => {
   for (let i = sim.nCloth; i < N; i++) {
     if (arr[0][i * 4 + 1] > 0.06) continue;
     floorGrains++;
-    if (SL[i] & 0x20000) asleep++;
-    if (SL[i] & 0x10000) grounded++;
+    if (SL[i * 4 + 3] & 0x20000) asleep++;
+    if (SL[i * 4 + 3] & 0x10000) grounded++;
     const v = Math.hypot(arr[0][i * 4] - arr[1][i * 4], arr[0][i * 4 + 1] - arr[1][i * 4 + 1], arr[0][i * 4 + 2] - arr[1][i * 4 + 2]) / dt;
     if (v > 0.01) moving++;
   }
   // awake floor grains: speed histogram, counters, where they are
   const sp = [], cnt = [], ys = [], rs = [];
   for (let i = sim.nCloth; i < N; i++) {
-    if (arr[0][i * 4 + 1] > 0.06 || SL[i] & 0x20000) continue;
+    if (arr[0][i * 4 + 1] > 0.06 || SL[i * 4 + 3] & 0x20000) continue;
     sp.push(Math.hypot(arr[0][i * 4] - arr[1][i * 4], arr[0][i * 4 + 1] - arr[1][i * 4 + 1], arr[0][i * 4 + 2] - arr[1][i * 4 + 2]) / dt);
-    cnt.push(SL[i] & 0xffff);
+    cnt.push(SL[i * 4 + 3] & 0xffff);
     ys.push(arr[0][i * 4 + 1]);
     rs.push(Math.hypot(arr[0][i * 4], arr[0][i * 4 + 2]));
   }

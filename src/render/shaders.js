@@ -599,9 +599,9 @@ fn fabric(rel: vec3f, pitch: f32, gap: f32, base: vec3f, fuzz: f32, fw: f32) -> 
     bump = 0.0005;
     // printed bands
     let y = rel.y;
-    let band = 1.0 - smoothstep(0.024, 0.026, abs(y - 0.02));
-    let red1 = 1.0 - smoothstep(0.005, 0.0062, abs(y - 0.065));
-    let red2 = 1.0 - smoothstep(0.005, 0.0062, abs(y + 0.025));
+    let band = 1.0 - smoothstep(0.011, 0.0125, abs(y - 0.03));
+    let red1 = 1.0 - smoothstep(0.0032, 0.0042, abs(y - 0.056));
+    let red2 = 1.0 - smoothstep(0.0032, 0.0042, abs(y - 0.004));
     let ink = s.albedo / vec3f(0.90, 0.88, 0.82);
     s.albedo = mix(s.albedo, vec3f(0.10, 0.20, 0.48) * ink, band * 0.92);
     s.albedo = mix(s.albedo, vec3f(0.62, 0.08, 0.06) * ink, max(red1, red2) * 0.92);

@@ -19,7 +19,8 @@ struct Params {
   pulse: f32, time: f32, fluidCohesion: f32, floorMu: f32,
   clothSor: f32, boundaryPsi: f32, fluidOmega: f32, fluidMaxStep: f32,
   clothDisk: f32, contactDamp: f32, maxCorr: f32, wakeAll: f32,
-  vSleep: f32, vWake: f32, sleepSteps: f32, pad3: f32,
+  sleepTol: f32, vWake: f32, sleepSteps: f32, vSepMax: f32,
+  pad4: f32, pad5: f32, pad6: f32, pad7: f32,
 };
 
 const KIND_GRAIN: u32 = 0u;
@@ -32,10 +33,20 @@ const FRAYED: u32 = 32u; // near a cut: only these cloth particles' edges may ri
 // dynamic state, copied into the sorted flags by scatter so neighbours can see it
 const GROUNDED: u32 = 64u; // rests (through a chain of contacts) on the floor
 const ASLEEP: u32 = 128u;  // at rest: frozen in place, acts as immovable support
+const MOVING: u32 = 256u;  // really travelling (keeps leaving its still-period anchor), not just buzzing
 
-// per-particle sleep word: [0..15] stillness counter, 16 grounded, 17 asleep, [24..31] contacts
+// per-particle sleep state: xyz = where the current still period began, w = bitcast word with
+// [0..15] stillness counter, 16 grounded, 17 asleep, [24..31] contacts, [18..23]: skin: hops to
+// support; grains: countdown since the grain last really travelled (left its still-period anchor)
 const S_GROUNDED: u32 = 0x10000u;
 const S_ASLEEP: u32 = 0x20000u;
+// skin is also supported through its own fabric: hops (along cloth links) to a skin particle that
+// rests on the floor or on grounded grains. 63 = unsupported. Recomputed every substep, so a piece
+// that is cut loose loses its support within a few frames.
+const HOP_SHIFT: u32 = 18u;
+const HOP_MASK: u32 = 0xfc0000u;
+const HOP_NONE: u32 = 63u;
+fn hopsOf(w: u32) -> u32 { return (w & HOP_MASK) >> HOP_SHIFT; }
 const EMPTY: u32 = 0xffffffffu;
 
 fn invMassOf(f: u32) -> f32 {
@@ -68,7 +79,7 @@ const TYPES = {
   restLra: 'array<vec4f>', normals: 'array<vec4f>',
   info: 'array<u32>', cellCount: 'array<u32>', cellStart: 'array<u32>', blockSums: 'array<u32>',
   edgeAlive: 'array<u32>', vtList: 'array<u32>',
-  lambdaS: 'array<f32>', sleep: 'array<u32>', wake: 'array<u32>',
+  lambdaS: 'array<f32>', vfix: 'array<vec4f>', sleep: 'array<vec4f>', wake: 'array<u32>',
   pCellOff: 'array<vec2u>', adjStart: 'array<vec2u>', vtStart: 'array<vec2u>',
   adj: 'array<vec4u>', cons: 'array<vec4u>', tris: 'array<vec4u>', triEdges: 'array<vec4u>',
 };
@@ -130,7 +141,7 @@ export const KERNELS = {
   // Predict positions and bin them into the spatial hash (count pass of the counting sort).
   integrate: {
     wg: 256,
-    binds: ['P', 'pos:rw', 'prev:rw', 'info:r', 'sleep:r', 'cellCount:rwa', 'pCellOff:rw'],
+    binds: ['P', 'pos:rw', 'prev:rw', 'info:r', 'sleep:r', 'cellCount:rwa', 'pCellOff:rw', 'vfix:r'],
     code: /* wgsl */ `
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -140,10 +151,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if ((f & DEAD) != 0u) { pCellOff[i] = vec2u(EMPTY, 0u); return; }
   var p = pos[i];
   // velocity of the substep that just finished (PBD: v = (x - x_prev) / dt)
-  var v = (p.xyz - prev[i].xyz) / P.dt;
+  var v = (p.xyz - prev[i].xyz) / P.dt - vfix[i].xyz;
   if (any(v != v)) { v = vec3f(0.0); }
   prev[i] = p;
-  if (invMassOf(f) != 0.0 && (sleep[i] & S_ASLEEP) == 0u) {
+  if (invMassOf(f) != 0.0 && (bitcast<u32>(sleep[i].w) & S_ASLEEP) == 0u) {
     v.y += P.gravity * P.dt;
     v *= P.damping;
     let sp = length(v);
@@ -223,7 +234,10 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
     run += v[k];
   }
   // total number of inserted particles lives just past the block sums
-  if (t == 255u) { blockSums[nb] = tmp[255]; }
+  if (t == 255u) {
+    blockSums[nb] = tmp[255];
+    blockSums[nb + 1u] += 1u; // substep counter (staggers the sleep audit)
+  }
 }`,
   },
 
@@ -235,7 +249,10 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let h = gid.x;
   if (h <= P.hashMask) { cellStart[h] += blockSums[h >> 10u]; }
-  if (h == 0u) { cellStart[P.hashMask + 1u] = blockSums[P.numBlocks]; }
+  if (h == 0u) {
+    cellStart[P.hashMask + 1u] = blockSums[P.numBlocks];
+    cellStart[P.hashMask + 2u] = blockSums[P.numBlocks + 1u];
+  }
 }`,
   },
 
@@ -252,10 +269,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let s = cellStart[co.x] + co.y;
   let p = pos[i].xyz;
   sortedPos[s] = vec4f(p, bitcast<f32>(i));
-  let st = sleep[i];
+  let st = bitcast<u32>(sleep[i].w);
   var f = info[i];
   if ((st & S_GROUNDED) != 0u) { f |= GROUNDED; }
   if ((st & S_ASLEEP) != 0u) { f |= ASLEEP; }
+  else if ((f & 3u) == KIND_GRAIN && (st & HOP_MASK) != 0u) { f |= MOVING; }
   sortedDisp[s] = vec4f(p - prev[i].xyz, bitcast<f32>(f));
 }`,
   },
@@ -307,6 +325,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     wg: 64,
     wgVar: true,
     binds: ['P', 'sortedPos:r', 'sortedDisp:r', 'cellStart:r', 'lambdaS:r', 'posNew:rw', 'normals:r', 'sleep:rw', 'wake:rwa'],
+    bindsGrain: ['P', 'sortedPos:r', 'sortedDisp:r', 'cellStart:r', 'vfix:rw', 'posNew:rw', 'normals:r', 'sleep:rw', 'wake:rwa'],
     code: /* wgsl */ `
 @compute @workgroup_size(WG)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -320,15 +339,23 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let fi = bitcast<u32>(da.w);
   let wi = invMassOf(fi);
   let ki = fi & 3u;
-  if (wi == 0.0) { posNew[i] = vec4f(xi, 0.0); sleep[i] = 0u; return; }
+  vfix[i] = vec4f(0.0); // @grain
+  if (wi == 0.0) { posNew[i] = vec4f(xi, 0.0); sleep[i] = vec4f(0.0, 0.0, 0.0, bitcast<f32>(HOP_NONE << HOP_SHIFT)); return; }
 
   // a sleeping grain stays frozen (and skips the neighbour search) until something wakes it
-  let st = sleep[i];
+  let sv = sleep[i];
+  let st = bitcast<u32>(sv.w);
   let woken = atomicExchange(&wake[i], 0u) != 0u || P.wakeAll > 0.5;
-  if ((fi & ASLEEP) != 0u && !woken) {
+  let sleeping = (fi & ASLEEP) != 0u && !woken;
+  // every 8th substep (staggered per particle) a sleeping particle re-checks its surroundings: it
+  // wakes if nothing holds it up any more, or if a neighbour is moving (e.g. the pile is draining)
+  let audit = sleeping && ((i + cellStart[P.hashMask + 2u]) & 7u) == 0u;
+  if (sleeping && !audit) {
     posNew[i] = vec4f(xi, -1.0 - f32(st >> 24u));
     return;
   }
+  var supported = xi.y <= P.floorY + 1.05 * P.radius;
+  var stirred = false;
 
   let r = P.radius;
   let fast = length(da.xyz) > P.vWake * P.dt;
@@ -339,7 +366,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let reach = select(P.cellSize, d0 * 1.4, ki == KIND_FLUID);
   let rng = select(reach, max(h, reach), ki == KIND_FLUID);
   let rng2 = rng * rng;
-  let lamI = lambdaS[s];
+  let lamI = lambdaS[s]; // @fluid
   let prevI = xi - da.xyz;
   var partner = EMPTY;
   if ((fi & PAIRED) != 0u) { partner = P.numCloth + ((i - P.numCloth) ^ 1u); }
@@ -366,24 +393,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           if (ki == KIND_CLOTH && kj == KIND_CLOTH) { continue; }
           let dist = sqrt(r2);
           if (dist < d0 * 1.2) { nb += 1.0; }
-          if (FLUID_SCENE && ki == KIND_FLUID && kj == KIND_FLUID) {
-            let nf = rv / dist;
-            let q = 1.0 - r2 / h2;
-            let ww = q * q * q;
-            let x = ww * P.invWdq;
-            let scorr = -P.scorrK * x * x * x * x;
-            let t = 1.0 - dist / h;
-            let grad = (-P.spikyGrad * t * t) * nf;
-            dFluid += ((lamI + lambdaS[k] + scorr) * P.invRho0 * P.fluidOmega) * grad;
-            dFluid += P.viscosity * ww * (db.xyz - da.xyz);
-            dFluid -= P.fluidCohesion * h * (dist / h) * t * nf;
-            continue;
-          }
-          if (FLUID_SCENE && ki == KIND_FLUID && dist < h) {
-            let t = 1.0 - dist / h;
-            let grad = (-P.spikyGrad * t * t) * (rv / dist);
-            dFluid += (lamI * P.boundaryPsi * P.invRho0 * P.fluidOmega) * grad;
-          }
+          if (FLUID_SCENE && ki == KIND_FLUID && kj == KIND_FLUID) { // @fluid
+            let nf = rv / dist; // @fluid
+            let q = 1.0 - r2 / h2; // @fluid
+            let ww = q * q * q; // @fluid
+            let x = ww * P.invWdq; // @fluid
+            let scorr = -P.scorrK * x * x * x * x; // @fluid
+            let t = 1.0 - dist / h; // @fluid
+            let grad = (-P.spikyGrad * t * t) * nf; // @fluid
+            dFluid += ((lamI + lambdaS[k] + scorr) * P.invRho0 * P.fluidOmega) * grad; // @fluid
+            dFluid += P.viscosity * ww * (db.xyz - da.xyz); // @fluid
+            dFluid -= P.fluidCohesion * h * (dist / h) * t * nf; // @fluid
+            continue; // @fluid
+          } // @fluid
+          if (FLUID_SCENE && ki == KIND_FLUID && dist < h) { // @fluid
+            let t = 1.0 - dist / h; // @fluid
+            let grad = (-P.spikyGrad * t * t) * (rv / dist); // @fluid
+            dFluid += (lamI * P.boundaryPsi * P.invRho0 * P.fluidOmega) * grad; // @fluid
+          } // @fluid
           var nrm = rv / dist;
           var pen = d0 - dist;
           if (ki == KIND_CLOTH || kj == KIND_CLOTH) {
@@ -411,6 +438,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           if (pen > 0.0) {
             if ((fj & GROUNDED) != 0u && kj != KIND_FLUID) { groundedN = true; }
             if ((fj & ASLEEP) != 0u && fast) { atomicStore(&wake[j], 1u); }
+            if (b.y < xi.y - 0.25 * r || kj == KIND_CLOTH) { supported = true; }
+            if ((fj & MOVING) != 0u && kj != KIND_CLOTH) { stirred = true; }
             // sleeping neighbours are immovable support
             let wj = select(invMassOf(fj), 0.0, (fj & ASLEEP) != 0u);
             let fr = wi / (wi + wj);
@@ -442,6 +471,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dcl = length(dc);
   let maxCorr = P.maxCorr * r;
   if (dcl > maxCorr) { dc *= maxCorr / dcl; }
+  if (audit && supported && !stirred) {
+    posNew[i] = vec4f(xi, -1.0 - f32(st >> 24u)); // still resting: stay asleep
+    return;
+  }
+  // anything that was asleep and is processed now has just been woken: restart its still period
+  let wokeNow = (fi & ASLEEP) != 0u;
   var x = xi + dFluid + dc;
 
   // floor with friction
@@ -463,17 +498,44 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   x.x = clamp(x.x, -P.bounds, P.bounds);
   x.z = clamp(x.z, -P.bounds, P.bounds);
   x.y = min(x.y, 6.0);
-  // sleep bookkeeping: grains that are supported and nearly still for a while fall asleep
-  let grounded = x.y <= fl + 0.05 * r || groundedN;
+  // sleep bookkeeping: a supported particle that has stayed within sleepTol of where its still
+  // period began (however much it buzzed in between) for sleepSteps substeps falls asleep
+  let direct = x.y <= fl + 0.05 * r || groundedN;
+  var hops = HOP_NONE;
+  // 0 only while directly supported; otherwise keep the fabric value finalize() propagates
+  if (ki == KIND_CLOTH) { hops = select(clamp(hopsOf(st), 1u, HOP_NONE), 0u, direct); }
+  let grounded = direct || hops < HOP_NONE;
   var counter = 0u;
-  if (ki != KIND_FLUID && grounded && P.wakeAll < 0.5 && length(x - prevI) < P.vSleep * P.dt) {
-    counter = min((st & 0xffffu) + 1u, 0xffffu);
+  var anchor = x;
+  // grains: "really moving" countdown; being woken does not count, only travelling does
+  var moved = max(hopsOf(st), 1u) - 1u;
+  if (ki != KIND_FLUID && grounded && P.wakeAll < 0.5) {
+    let c0 = select(st & 0xffffu, 0u, wokeNow);
+    if (c0 > 0u && length(x - sv.xyz) < P.sleepTol) {
+      counter = min(c0 + 1u, 0xffffu);
+      anchor = sv.xyz;
+    } else {
+      if (c0 > 0u) { moved = HOP_NONE; } // left its anchor: it is travelling
+      counter = 1u;
+    }
   }
+  if (ki != KIND_CLOTH) { hops = moved; }
   let asleep = f32(counter) >= P.sleepSteps;
   if (asleep) { x = prevI; }
-  sleep[i] = counter | select(0u, S_GROUNDED, grounded) | select(0u, S_ASLEEP, asleep) | (u32(min(nb, 255.0)) << 24u);
+  let word = counter | select(0u, S_GROUNDED, grounded) | select(0u, S_ASLEEP, asleep) | (hops << HOP_SHIFT) | (u32(min(nb, 255.0)) << 24u);
+  sleep[i] = vec4f(anchor, bitcast<f32>(word));
   // w carries the neighbour count through to rendering (ambient occlusion); negative = asleep
   posNew[i] = vec4f(x, select(nb, -1.0 - nb, asleep));
+  // Contacts may resolve overlap completely, but must not fling grains: the outward speed they add
+  // along the push direction is capped (stopping an impact or riding along with moving cloth is
+  // unaffected). integrate() removes the excess next substep, so positions stay fully resolved.
+  let dcn = length(dc); // @grain
+  if (dcn > 1e-9) { // @grain
+    let n = dc / dcn; // @grain
+    let vout = dot(x - prevI, n) / P.dt; // @grain
+    let cap = max(P.vSepMax, dot(da.xyz, n) / P.dt); // @grain
+    if (vout > cap) { vfix[i] = vec4f(n * (vout - cap), 0.0); } // @grain
+  } // @grain
 }`,
   },
 
@@ -533,7 +595,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   // posNew -> pos: soft bending (Jacobi), long range attachments, rest-shape anchoring, rice pairs.
   finalize: {
     wg: 256,
-    binds: ['P', 'posNew:r', 'pos:rw', 'info:r', 'adjStart:r', 'adj:r', 'edgeAlive:r', 'restLra:r'],
+    binds: ['P', 'posNew:r', 'pos:rw', 'info:r', 'adjStart:r', 'adj:r', 'edgeAlive:r', 'restLra:r', 'sleep:rw'],
     code: /* wgsl */ `
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -562,11 +624,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   var acc = vec3f(0.0);
   var cnt = 0.0;
+  var hopN = HOP_NONE;
   let rg = adjStart[i];
   for (var k = rg.x; k < rg.x + rg.y; k++) {
     let e = adj[k];
     let fj = info[e.x];
     if ((fj & DEAD) != 0u || edgeAlive[e.y] == 0u) { continue; }
+    hopN = min(hopN, hopsOf(bitcast<u32>(sleep[e.x].w)) + 1u);
     let d = p.xyz - posNew[e.x].xyz;
     let L = length(d);
     if (L < 1e-9) { continue; }
@@ -576,6 +640,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     cnt += 1.0;
   }
   var x = p.xyz + acc * (P.clothSor / max(cnt, 1.0));
+  // support through the fabric: one hop further than the best-supported neighbour
+  let sw = sleep[i];
+  let word = bitcast<u32>(sw.w);
+  if (hopsOf(word) != 0u) {
+    let hops = min(hopN, HOP_NONE);
+    sleep[i] = vec4f(sw.xyz, bitcast<f32>((word & ~HOP_MASK) | (hops << HOP_SHIFT)));
+  }
 
   let rp = restLra[2u * i];
   let pin = bitcast<u32>(rp.w);

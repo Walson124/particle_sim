@@ -129,7 +129,7 @@ export class Simulation {
     };
     const edgeAlive = new Uint32Array(mesh.numEdges).fill(1);
     this.buf = {
-      P: d.createBuffer({ size: 224, usage: SU.UNIFORM | SU.COPY_DST | SU.COPY_SRC }),
+      P: d.createBuffer({ size: 240, usage: SU.UNIFORM | SU.COPY_DST | SU.COPY_SRC }),
       pos: mk(pos),
       prev: mk(pos),
       posNew: mk(pos),
@@ -141,7 +141,8 @@ export class Simulation {
       sortedPos: mk(N * 16),
       sortedDisp: mk(N * 16),
       lambdaS: mk(N * 4),
-      sleep: mk(N * 4),
+      vfix: mk(N * 16),
+      sleep: mk(this.initialSleepState(N)),
       wake: mk(N * 4),
       adjStart: mk(mesh.adjStart),
       adj: mk(mesh.adj),
@@ -154,7 +155,7 @@ export class Simulation {
       triEdges: mk(mesh.triEdges),
       normals: mk(this.nCloth * 16),
     };
-    this.paramsData = new ArrayBuffer(224);
+    this.paramsData = new ArrayBuffer(240);
     this.paramsF = new Float32Array(this.paramsData);
     this.paramsU = new Uint32Array(this.paramsData);
 
@@ -171,7 +172,7 @@ export class Simulation {
     const d = this.device;
     this.kernels = {};
     for (const [name, k] of Object.entries(KERNELS)) {
-      const binds = parseBinds(k.binds);
+      const binds = parseBinds(this.cfg.kind !== 'fluid' && k.bindsGrain ? k.bindsGrain : k.binds);
       const layout = d.createBindGroupLayout({
         entries: binds.map((b, i) => ({
           binding: i,
@@ -184,7 +185,11 @@ export class Simulation {
       const head = `const FLUID_SCENE: bool = ${this.cfg.kind === 'fluid'};
 const WG: u32 = ${wg}u;
 `;
-      const module = d.createShaderModule({ label: name, code: head + COMMON + bindingHeader(k.binds) + k.code });
+      const fluidScene = this.cfg.kind === 'fluid';
+      const kb = !fluidScene && k.bindsGrain ? k.bindsGrain : k.binds;
+      // lines tagged @fluid / @grain only exist in that kind of scene
+      const kc = k.code.split('\n').filter((l) => !l.includes(fluidScene ? '// @grain' : '// @fluid')).join('\n');
+      const module = d.createShaderModule({ label: name, code: head + COMMON + bindingHeader(kb) + kc });
       const pipeline = d.createComputePipeline({
         label: name,
         layout: d.createPipelineLayout({ bindGroupLayouts: [layout] }),
@@ -224,7 +229,7 @@ const WG: u32 = ${wg}u;
     const fc = this.fluidConsts;
     f[0] = dt; f[1] = this.radius; f[2] = this.cellSize; f[3] = c.gravity;
     u[4] = this.N; u[5] = this.nCloth; u[6] = this.H - 1; u[7] = this.numBlocks;
-    f[8] = c.muS; f[9] = c.muK; f[10] = c.cohesion; f[11] = Math.exp(-(this.warmup > 0 ? 12 : c.damping) * dt);
+    f[8] = c.muS; f[9] = c.muK; f[10] = c.cohesion; f[11] = Math.exp(-(this.warmup > 0 ? (c.warmupDamping ?? 6) : c.damping) * dt);
     f[12] = c.clothInvMass; f[13] = 0; f[14] = 1.8; f[15] = c.sor ?? 1.4;
     f[16] = fc ? fc.h : this.cellSize;
     f[17] = fc ? fc.invRho0 : 0;
@@ -244,10 +249,11 @@ const WG: u32 = ${wg}u;
     f[49] = c.contactDamp ?? 0;
     f[50] = c.maxCorr ?? (c.kind === 'fluid' ? 1 : 0.2);
     f[51] = this.wakeFrames > 0 ? 1 : 0;
-    f[52] = c.vSleep ?? 0.04;
+    f[52] = (c.sleepTol ?? 0.3) * this.radius;
     f[53] = c.vWake ?? 0.3;
     // sleeping is a granular thing: fluids never sleep
     f[54] = c.kind === 'fluid' ? 1e9 : Math.round((c.sleepTime ?? 0.25) * 60 * sub);
+    f[55] = c.vSepMax ?? 0.25;
     this.device.queue.writeBuffer(this.buf.P, 0, this.paramsData);
   }
 
@@ -451,6 +457,13 @@ const WG: u32 = ${wg}u;
     this.device.queue.writeBuffer(this.buf.info, 0, fl);
     this.ropeTop = null;
     this.wakeFrames = 3;
+  }
+
+  // every particle starts awake and unsupported (63 = no skin hops to support)
+  initialSleepState(N) {
+    const s = new Uint32Array(N * 4);
+    for (let i = 0; i < N; i++) s[i * 4 + 3] = 63 << 18;
+    return s;
   }
 
   // Cloth connectivity (stretch edges) as CSR, for re-routing the long range attachments.

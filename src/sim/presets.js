@@ -47,7 +47,13 @@ export const PRESETS = {
     label: 'Rice sack',
     kind: 'grain',
     pairs: true, // each grain is a rigid two-sphere "dumbbell" -> elongated rice kernels
-    shape: { ax: 0.16, ay: 0.24, az: 0.12, exp: 3.2, centerY: 0.242, neckStart: 0.72, neckScale: 0.3 },
+    // a full sack lying on the floor: built close to the low pillow it settles into, so it does not
+    // spend its first seconds slumping
+    shape: { ax: 0.21, ay: 0.12, az: 0.15, exp: 3.2, centerY: 0.122, neckStart: 0.72, neckScale: 0.3 },
+    warmup: 360, // hidden settling steps
+    // a sack draining through a cut moves slowly inside: grains must be still for longer before they
+    // sleep, or the pile behind the wound freezes and the flow stops
+    sleepTime: 2,
     pinAbove: 0,
     fillTop: 0.78,
     rope: false,
@@ -63,8 +69,8 @@ export const PRESETS = {
     bendK: 0.1,
     compressK: 0.25,
     tear: 1.5,
-    clothInvMass: 0.3,
-    clothIters: 4,
+    clothInvMass: 0.15, // heavy, stiff sack: the rim of a slumped sack carries all the hoop stress
+    clothIters: 7,
     clothSor: 1.5,
     anchorK: 0.0,
     lraSlack: 1.0,

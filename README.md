@@ -82,10 +82,16 @@ Robustness details that make it hold together:
   The material around a wound is marked *frayed*, and only frayed edges can tear. Slits rip
   open under load, but intact cloth never ruptures by itself.
 - **Substeps scale with particle count** (about N^0.23), so deep piles stay nearly incompressible.
-- **Sleeping.** A grain (or skin particle) that is supported — touching the floor, or resting on
-  something that is — and has been nearly still for a quarter second falls asleep: it stops
-  moving, skips the neighbour search and acts as immovable support. Fast neighbours wake it, as
-  does any cut or release. Piles come truly to rest, and settled sand costs much less.
+- **No flinging.** Contacts always resolve overlap completely, but the outward speed they may add
+  is capped (0.25 m/s along the push). Grains packed under load no longer spring out of a fresh
+  cut or bounce off the pile, while stopping on impact and riding along with moving cloth work
+  as before. The excess velocity is removed in the next substep, so positions stay correct.
+- **Sleeping.** A supported particle (on the floor, on grounded grains, or, for skin, connected
+  through the fabric to skin that is) that stays within about 1 mm of one spot for a while falls
+  asleep: it freezes, skips the neighbour search and acts as immovable support. It wakes on a
+  cut or release, when a fast neighbour hits it, or at a periodic audit if nothing holds it up any
+  more or a touching grain is really travelling, which is how a draining pile stays awake.
+  Grains must be still for 0.25 s (sand) or 2 s (rice, which drains slowly through a slit).
 - **Cut-off pieces fall.** The skin's long-range attachments to the rope are re-routed over the
   cloth that is still connected (cuts and tears included) after every cut, so a piece severed
   from the rope drops instead of hanging from nothing.

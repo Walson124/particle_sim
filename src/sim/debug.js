@@ -131,7 +131,7 @@ export async function debugStats(sim) {
 export async function flierStats(sim) {
   const d = sim.device, N = sim.N;
   const enc = d.createCommandEncoder();
-  const st = [sim.buf.pos, sim.buf.prev].map((buf) => {
+  const st = [sim.buf.pos, sim.buf.prev, sim.buf.vfix].map((buf) => {
     const b = d.createBuffer({ size: N * 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     enc.copyBufferToBuffer(buf, 0, b, 0, N * 16);
     return b;
@@ -139,7 +139,7 @@ export async function flierStats(sim) {
   d.queue.submit([enc.finish()]);
   const data = [];
   for (const b of st) { await b.mapAsync(GPUMapMode.READ); data.push(new Float32Array(b.getMappedRange().slice(0))); b.destroy(); }
-  const [P, Q] = data;
+  const [P, Q, VF] = data;
   const dt = 1 / 60 / sim.cfg.substeps, r = sim.radius;
   // grid of live skin particles to measure distance to the skin
   const g = 4 * r, grid = new Map();
@@ -152,7 +152,7 @@ export async function flierStats(sim) {
   }
   let n = 0, nearSkin = 0, maxVy = 0, at = null;
   for (let i = sim.nCloth; i < N; i++) {
-    const vy = (P[i * 4 + 1] - Q[i * 4 + 1]) / dt;
+    const vy = (P[i * 4 + 1] - Q[i * 4 + 1]) / dt - VF[i * 4 + 1]; // as the next substep sees it
     if (vy < 1) continue;
     n++;
     const cx = Math.floor(P[i * 4] / g), cy = Math.floor(P[i * 4 + 1] / g), cz = Math.floor(P[i * 4 + 2] / g);
