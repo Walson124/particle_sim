@@ -1,4 +1,4 @@
-// WGSL compute kernels for the unified particle solver.
+﻿// WGSL compute kernels for the unified particle solver.
 //
 // Per substep:  integrate -> count -> scanBlocks -> scanTop -> scanAdd -> scatter
 //               -> [lambda] -> particles (contacts / PBF) -> stretch (per colour) -> finalize
@@ -20,7 +20,7 @@ struct Params {
   clothSor: f32, boundaryPsi: f32, fluidOmega: f32, fluidMaxStep: f32,
   clothDisk: f32, contactDamp: f32, maxCorr: f32, wakeAll: f32,
   sleepTol: f32, vWake: f32, sleepSteps: f32, vSepMax: f32,
-  pad4: f32, pad5: f32, pad6: f32, pad7: f32,
+  sleepStepsHung: f32, pad5: f32, pad6: f32, pad7: f32,
 };
 
 const KIND_GRAIN: u32 = 0u;
@@ -34,12 +34,14 @@ const FRAYED: u32 = 32u; // near a cut: only these cloth particles' edges may ri
 const GROUNDED: u32 = 64u; // rests (through a chain of contacts) on the floor
 const ASLEEP: u32 = 128u;  // at rest: frozen in place, acts as immovable support
 const MOVING: u32 = 256u;  // really travelling (keeps leaving its still-period anchor), not just buzzing
+const HUNG: u32 = 512u;    // grounded only through cloth hanging from the rope, not via the floor
 
 // per-particle sleep state: xyz = where the current still period began, w = bitcast word with
-// [0..15] stillness counter, 16 grounded, 17 asleep, [24..31] contacts, [18..23]: skin: hops to
-// support; grains: countdown since the grain last really travelled (left its still-period anchor)
+// [0..15] stillness counter, 16 grounded, 17 asleep, [24..30] contacts, 31 hung, [18..23]: skin:
+// hops to support; grains: countdown since the grain last really travelled (left its anchor)
 const S_GROUNDED: u32 = 0x10000u;
 const S_ASLEEP: u32 = 0x20000u;
+const S_HUNG: u32 = 0x80000000u;
 // skin is also supported through its own fabric: hops (along cloth links) to a skin particle that
 // rests on the floor or on grounded grains. 63 = unsupported. Recomputed every substep, so a piece
 // that is cut loose loses its support within a few frames.
@@ -272,6 +274,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let st = bitcast<u32>(sleep[i].w);
   var f = info[i];
   if ((st & S_GROUNDED) != 0u) { f |= GROUNDED; }
+  if ((st & S_HUNG) != 0u) { f |= HUNG; }
   if ((st & S_ASLEEP) != 0u) { f |= ASLEEP; }
   else if ((f & 3u) == KIND_GRAIN && (st & HOP_MASK) != 0u) { f |= MOVING; }
   sortedDisp[s] = vec4f(p - prev[i].xyz, bitcast<f32>(f));
@@ -345,13 +348,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   // a sleeping grain stays frozen (and skips the neighbour search) until something wakes it
   let sv = sleep[i];
   let st = bitcast<u32>(sv.w);
-  let woken = atomicExchange(&wake[i], 0u) != 0u || P.wakeAll > 0.5;
+  // (a plain load first: almost nobody has been woken, and a read-modify-write per particle per
+  // substep is not free)
+  var woken = P.wakeAll > 0.5;
+  if (atomicLoad(&wake[i]) != 0u) { atomicStore(&wake[i], 0u); woken = true; }
   let sleeping = (fi & ASLEEP) != 0u && !woken;
-  // every 8th substep (staggered per particle) a sleeping particle re-checks its surroundings: it
-  // wakes if nothing holds it up any more, or if a neighbour is moving (e.g. the pile is draining)
-  let audit = sleeping && ((i + cellStart[P.hashMask + 2u]) & 7u) == 0u;
+  // Travelling grains wake the sleepers they touch themselves (in the contact loop below). What a
+  // sleeper cannot be told is that its support went away, so every 32nd substep it re-checks its
+  // surroundings and wakes if nothing holds it up any more. Audits are staggered per block of 64
+  // sorted slots, not per particle: one auditing thread holds up its whole wave for a full
+  // neighbour search, and in a settled scene audits are most of the work.
+  let audit = sleeping && (((s >> 6u) + cellStart[P.hashMask + 2u]) & 31u) == 0u;
   if (sleeping && !audit) {
-    posNew[i] = vec4f(xi, -1.0 - f32(st >> 24u));
+    posNew[i] = vec4f(xi, -1.0 - f32((st >> 24u) & 0x7fu));
     return;
   }
   // (cloth is also held up through the fabric: on a slope or in a fold nothing is right below it)
@@ -361,6 +370,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let r = P.radius;
   let fast = length(da.xyz) > P.vWake * P.dt;
   var groundedN = false;
+  var floorN = false; // ... by a neighbour that rests on the floor, not one hanging from the rope
   let d0 = 2.0 * r;
   let h = P.h;
   let h2 = h * h;
@@ -444,8 +454,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             pen = min(th - dn, th + d0);
           }
           if (pen > 0.0) {
-            if ((fj & GROUNDED) != 0u && kj != KIND_FLUID) { groundedN = true; }
-            if ((fj & ASLEEP) != 0u && fast) { atomicStore(&wake[j], 1u); }
+            if ((fj & GROUNDED) != 0u && kj != KIND_FLUID) {
+              groundedN = true;
+              if ((fj & HUNG) == 0u) { floorN = true; }
+            }
+            // a fast or travelling particle wakes the sleepers it touches (e.g. the pile is draining)
+            if ((fj & ASLEEP) != 0u && (fast || (fi & MOVING) != 0u)) { atomicStore(&wake[j], 1u); }
             if (b.y < xi.y - 0.25 * r || kj == KIND_CLOTH) { supported = true; }
             if ((fj & MOVING) != 0u && kj != KIND_CLOTH) { stirred = true; }
             // sleeping neighbours are immovable support
@@ -480,7 +494,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let maxCorr = P.maxCorr * r;
   if (dcl > maxCorr) { dc *= maxCorr / dcl; }
   if (audit && supported && !stirred) {
-    posNew[i] = vec4f(xi, -1.0 - f32(st >> 24u)); // still resting: stay asleep
+    posNew[i] = vec4f(xi, -1.0 - f32((st >> 24u) & 0x7fu)); // still resting: stay asleep
     return;
   }
   // anything that was asleep and is processed now has just been woken: restart its still period
@@ -508,11 +522,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   x.y = min(x.y, 6.0);
   // sleep bookkeeping: a supported particle that has stayed within sleepTol of where its still
   // period began (however much it buzzed in between) for sleepSteps substeps falls asleep
-  let direct = x.y <= fl + 0.05 * r || groundedN;
+  let onFloor = x.y <= fl + 0.05 * r;
+  let direct = onFloor || groundedN;
   var hops = HOP_NONE;
   // 0 only while directly supported; otherwise keep the fabric value finalize() propagates
   if (ki == KIND_CLOTH) { hops = select(clamp(hopsOf(st), 1u, HOP_NONE), 0u, direct); }
   let grounded = direct || hops < HOP_NONE;
+  // Held up only by the hanging bag (not the floor): such sand must be still for longer before it
+  // sleeps. A bag drains through a slit ever more slowly, and contents that dozed off would roof
+  // the slit over and stop the flow. (Skin learns from finalize() whether its rope still holds it.)
+  let hungI = grounded && !onFloor && !floorN && (groundedN || (ki == KIND_CLOTH && (st & S_HUNG) != 0u));
   var counter = 0u;
   // Cloth is judged on where its constraints left it last substep: x here is mid-solve (a contact
   // push that stretch then undoes) and would keep resetting the still period of resting cloth.
@@ -531,9 +550,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   if (ki != KIND_CLOTH) { hops = moved; }
-  let asleep = f32(counter) >= P.sleepSteps;
+  let asleep = f32(counter) >= select(P.sleepSteps, P.sleepStepsHung, hungI);
   if (asleep) { x = prevI; }
-  let word = counter | select(0u, S_GROUNDED, grounded) | select(0u, S_ASLEEP, asleep) | (hops << HOP_SHIFT) | (u32(min(nb, 255.0)) << 24u);
+  let word = counter | select(0u, S_GROUNDED, grounded) | select(0u, S_ASLEEP, asleep) | (hops << HOP_SHIFT) | (u32(min(nb, 127.0)) << 24u) | select(0u, S_HUNG, hungI);
   sleep[i] = vec4f(anchor, bitcast<f32>(word));
   // w carries the neighbour count through to rendering (ambient occlusion); negative = asleep
   posNew[i] = vec4f(x, select(nb, -1.0 - nb, asleep));
@@ -677,25 +696,26 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     cnt += 1.0;
   }
   var x = p.xyz + acc * (P.clothSor / max(cnt, 1.0));
+  let rp = restLra[2u * i];
+  let pin = bitcast<u32>(rp.w);
+  // Cloth still connected through intact fabric to the rope hangs from it: that holds it up as
+  // well as the floor does, so a hanging bag at rest (and its contents) can fall asleep. The pin is
+  // re-routed after every cut and tear; a severed piece has none (and is woken when it loses it).
+  let hung = pin != EMPTY && (info[pin] & (PINNED | DEAD)) == PINNED;
   // support through the fabric: one hop further than the best-supported neighbour
   let sw = sleep[i];
   let word = bitcast<u32>(sw.w);
   if (hopsOf(word) != 0u) {
-    let hops = min(hopN, HOP_NONE);
-    sleep[i] = vec4f(sw.xyz, bitcast<f32>((word & ~HOP_MASK) | (hops << HOP_SHIFT)));
+    let hops = select(min(hopN, HOP_NONE), 0u, hung);
+    sleep[i] = vec4f(sw.xyz, bitcast<f32>((word & ~(HOP_MASK | S_HUNG)) | (hops << HOP_SHIFT) | select(0u, S_HUNG, hung)));
   }
 
-  let rp = restLra[2u * i];
-  let pin = bitcast<u32>(rp.w);
-  if (pin != EMPTY) {
-    let fp = info[pin];
-    if ((fp & PINNED) != 0u && (fp & DEAD) == 0u) {
-      let l = restLra[2u * i + 1u];
-      let v = x - l.xyz;
-      let L = length(v);
-      let maxL = l.w * P.lraSlack;
-      if (L > maxL) { x = l.xyz + v * (maxL / L); }
-    }
+  if (hung) {
+    let l = restLra[2u * i + 1u];
+    let v = x - l.xyz;
+    let L = length(v);
+    let maxL = l.w * P.lraSlack;
+    if (L > maxL) { x = l.xyz + v * (maxL / L); }
   }
   if (P.anchorK > 0.0) { x = mix(x, rp.xyz, P.anchorK); }
   // constraints solved after the contact pass must not push cloth back through the floor

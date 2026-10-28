@@ -89,12 +89,17 @@ Robustness details that make it hold together:
 - **Sleeping.** A supported particle (on the floor, on grounded grains, or, for skin, connected
   through the fabric to skin that is) that stays within about 1 mm of one spot for a while falls
   asleep: it freezes, skips the neighbour search and acts as immovable support. It wakes on a
-  cut or release, when a fast neighbour hits it, or at a periodic audit if nothing holds it up any
-  more or a touching grain is really travelling, which is how a draining pile stays awake.
+  cut or release, when a fast or really travelling neighbour touches it (which is how a draining
+  pile stays awake), or at a periodic audit if nothing holds it up any more. Audits come every
+  32nd substep, staggered per block of 64 threads so whole GPU waves skip them together: in a
+  settled scene they are most of the remaining work.
   Grains must be still for 0.25 s (sand) or 2 s (rice, which drains slowly through a slit).
   Skin counts as held up through the fabric too (on a slope or in a fold nothing is directly
   below it), and its stillness is judged on its solved position, so cloth lying on the pile
   falls asleep instead of twitching forever.
+  Skin still connected to the rope is held up by it, so a hanging bag at rest sleeps with its
+  contents. Sand held up only by the hanging bag must be still for 1 s, or it would doze off while
+  the bag drains ever more slowly through a slit and roof the slit over.
 - **Cut-off pieces fall.** The skin's long-range attachments to the rope are re-routed over the
   cloth that is still connected (cuts and tears included) after every cut, so a piece severed
   from the rope drops instead of hanging from nothing. Cutting a particle also kills its edges,
@@ -144,6 +149,7 @@ KERNELS=1 node tests/perf.mjs sand 64000 ""     # GPU ms per kernel and per rend
 node tests/thincut.mjs sand                     # one-row ring cut: the lower piece must reach the floor
 node tests/clothrest.mjs sand                   # cut-off cloth landing on the pile must settle, not twitch or fly
 node tests/slash.mjs sand                       # mouse-like slashes: no cloth flies upwards
+node tests/settle.mjs sand 256000 24            # slash, pour: the pile must fall asleep; GPU ms per step meanwhile
 ```
 
 GPU time per frame on an AMD RDNA2 GPU (simulation + about 1 ms of rendering):
@@ -152,7 +158,7 @@ GPU time per frame on an AMD RDNA2 GPU (simulation + about 1 ms of rendering):
 | --- | --- | --- | --- |
 | 64k | 6.4 ms | 6.0 ms | 6.7 ms |
 | 128k | 11.3 ms | – | – |
-| 256k | 24.5 ms (16 ms once poured sand has settled) | – | – |
+| 256k | 30 ms while pouring; 20 ms untouched, 15 ms once poured sand has settled | – | – |
 
 If the GPU cannot sustain 60 Hz, the simulation runs one step per frame (smooth, slightly slow
 motion) instead of trying to catch up and stuttering.
