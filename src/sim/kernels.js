@@ -81,7 +81,7 @@ const TYPES = {
   edgeAlive: 'array<u32>', vtList: 'array<u32>',
   lambdaS: 'array<f32>', vfix: 'array<vec4f>', sleep: 'array<vec4f>', wake: 'array<u32>',
   pCellOff: 'array<vec2u>', adjStart: 'array<vec2u>', vtStart: 'array<vec2u>',
-  adj: 'array<vec4u>', cons: 'array<vec4u>', tris: 'array<vec4u>', triEdges: 'array<vec4u>',
+  adj: 'array<vec4u>', cons: 'array<vec4u>', tris: 'array<vec4u>', triEdges: 'array<vec4u>', edgeTris: 'array<vec2u>',
 };
 
 // binding spec: "name" (read-only), "name:rw", "name:rwa" (read_write, u32 -> atomic<u32>).
@@ -596,6 +596,29 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if ((f & DEAD) != 0u || (f & FRAYED) == 0u) { return; }
   let L = length(pos[c.x].xyz - pos[c.y].xyz);
   if (L > bitcast<f32>(c.z) * P.tearRatio) { edgeAlive[c.w] = 0u; }
+}`,
+  },
+
+  // After tearing: an edge that no intact triangle holds any more is an invisible thread (nothing
+  // is drawn there) that would still hang a piece of cloth from the rest. It goes too. Removing
+  // such an edge cannot break an intact triangle, so one pass is enough and threads cannot race.
+  prune: {
+    wg: 256,
+    binds: ['P', 'info:r', 'tris:r', 'triEdges:r', 'edgeTris:r', 'edgeAlive:rw'],
+    code: /* wgsl */ `
+fn intact(t: u32) -> bool {
+  if (t == EMPTY) { return false; }
+  let v = tris[t];
+  if (((info[v.x] | info[v.y] | info[v.z]) & DEAD) != 0u) { return false; }
+  let e = triEdges[t];
+  return edgeAlive[e.x] != 0u && edgeAlive[e.y] != 0u && edgeAlive[e.z] != 0u;
+}
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let e = gid.x;
+  if (e >= arrayLength(&edgeTris) || edgeAlive[e] == 0u) { return; }
+  let et = edgeTris[e];
+  if (!intact(et.x) && !intact(et.y)) { edgeAlive[e] = 0u; }
 }`,
   },
 

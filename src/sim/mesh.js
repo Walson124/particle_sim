@@ -287,6 +287,9 @@ export function buildBag(S, spacing, pinAbove) {
     }
   }
 
+  // the (up to two) triangles of every edge, for pruning edges no intact triangle holds any more
+  const edgeTris2 = new Uint32Array(E * 2).fill(0xffffffff);
+  for (let e = 0; e < E; e++) for (let k = 0; k < Math.min(edgeTris[e].length, 2); k++) edgeTris2[e * 2 + k] = edgeTris[e][k];
   const tris4 = new Uint32Array(T * 4);
   for (let t = 0; t < T; t++) {
     tris4[t * 4] = tris[t * 3];
@@ -327,7 +330,7 @@ export function buildBag(S, spacing, pinAbove) {
 
   return {
     numVerts: V, numTris: T, numEdges: E,
-    positions, tris, tris4, triEdges, adjStart, adj, vtStart, vtList, stretch, colorRanges,
+    positions, tris, tris4, triEdges, edgeTris: edgeTris2, adjStart, adj, vtStart, vtList, stretch, colorRanges,
     pinned, lraDist, lraPin, maxEdge: m.maxEdge,
   };
 }

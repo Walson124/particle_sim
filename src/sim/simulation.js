@@ -153,6 +153,7 @@ export class Simulation {
       vtList: mk(mesh.vtList),
       tris: mk(mesh.tris4),
       triEdges: mk(mesh.triEdges),
+      edgeTris: mk(mesh.edgeTris),
       normals: mk(this.nCloth * 16),
     };
     this.paramsData = new ArrayBuffer(240);
@@ -311,6 +312,7 @@ const WG: u32 = ${wg}u;
       run('finalize', N);
     }
     run('tear', this.buf.cons.size / 16);
+    run('prune', this.mesh.numEdges);
     run('normals', this.nCloth);
   }
 
@@ -530,6 +532,16 @@ const WG: u32 = ${wg}u;
     this.lastTorn = torn;
 
     const V = this.nCloth, fl = this.clothFlags, { start, nbr, len, edge } = this.graph;
+    // a cloth particle with no edge left is drawn as nothing: drop it rather than keep an
+    // invisible collider around
+    let orphaned = 0;
+    for (let v = 0; v < V; v++) {
+      if (fl[v] & DEAD) continue;
+      let linked = false;
+      for (let s = start[v]; s < start[v + 1] && !linked; s++) linked = alive[edge[s]] && !(fl[nbr[s]] & DEAD);
+      if (!linked) { fl[v] |= DEAD; orphaned++; }
+    }
+    if (orphaned) d.queue.writeBuffer(this.buf.info, 0, fl);
     const dist = new Float64Array(V).fill(Infinity);
     const pin = new Int32Array(V).fill(-1);
     const heap = new MinHeap();
