@@ -354,7 +354,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     posNew[i] = vec4f(xi, -1.0 - f32(st >> 24u));
     return;
   }
-  var supported = xi.y <= P.floorY + 1.05 * P.radius;
+  // (cloth is also held up through the fabric: on a slope or in a fold nothing is right below it)
+  var supported = xi.y <= P.floorY + 1.05 * P.radius || (ki == KIND_CLOTH && hopsOf(st) < HOP_NONE);
   var stirred = false;
 
   let r = P.radius;
@@ -513,12 +514,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (ki == KIND_CLOTH) { hops = select(clamp(hopsOf(st), 1u, HOP_NONE), 0u, direct); }
   let grounded = direct || hops < HOP_NONE;
   var counter = 0u;
-  var anchor = x;
+  // Cloth is judged on where its constraints left it last substep: x here is mid-solve (a contact
+  // push that stretch then undoes) and would keep resetting the still period of resting cloth.
+  let still = select(x, prevI, ki == KIND_CLOTH);
+  var anchor = still;
   // grains: "really moving" countdown; being woken does not count, only travelling does
   var moved = max(hopsOf(st), 1u) - 1u;
   if (ki != KIND_FLUID && grounded && P.wakeAll < 0.5) {
     let c0 = select(st & 0xffffu, 0u, wokeNow);
-    if (c0 > 0u && length(x - sv.xyz) < P.sleepTol) {
+    if (c0 > 0u && length(still - sv.xyz) < P.sleepTol) {
       counter = min(c0 + 1u, 0xffffu);
       anchor = sv.xyz;
     } else {

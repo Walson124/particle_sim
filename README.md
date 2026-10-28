@@ -92,6 +92,9 @@ Robustness details that make it hold together:
   cut or release, when a fast neighbour hits it, or at a periodic audit if nothing holds it up any
   more or a touching grain is really travelling, which is how a draining pile stays awake.
   Grains must be still for 0.25 s (sand) or 2 s (rice, which drains slowly through a slit).
+  Skin counts as held up through the fabric too (on a slope or in a fold nothing is directly
+  below it), and its stillness is judged on its solved position, so cloth lying on the pile
+  falls asleep instead of twitching forever.
 - **Cut-off pieces fall.** The skin's long-range attachments to the rope are re-routed over the
   cloth that is still connected (cuts and tears included) after every cut, so a piece severed
   from the rope drops instead of hanging from nothing. Cutting a particle also kills its edges,
