@@ -445,6 +445,19 @@ const WG: u32 = ${wg}u;
       }
     }
     this.device.queue.writeBuffer(this.buf.info, 0, fl);
+    // Edges of removed particles die too: bending springs span the edge shared by two triangles,
+    // so without this a one-row-wide cut would leave them bridging the gap and holding the piece.
+    const { start, edge } = this.graph, dead = [];
+    for (const v of killed) for (let s = start[v]; s < start[v + 1]; s++) dead.push(edge[s]);
+    dead.sort((a, b) => a - b);
+    const zeros = new Uint32Array(dead.length);
+    for (let k = 0; k < dead.length;) {
+      let m = k + 1;
+      while (m < dead.length && dead[m] <= dead[m - 1] + 1) m++;
+      const e0 = dead[k], n = dead[m - 1] - e0 + 1;
+      this.device.queue.writeBuffer(this.buf.edgeAlive, e0 * 4, zeros, 0, n);
+      k = m;
+    }
     this.wakeFrames = 3; // whatever rested on the removed cloth must feel gravity again
     this.attachmentsDirty = true;
     return killed.length;

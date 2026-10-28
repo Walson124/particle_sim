@@ -94,7 +94,13 @@ Robustness details that make it hold together:
   Grains must be still for 0.25 s (sand) or 2 s (rice, which drains slowly through a slit).
 - **Cut-off pieces fall.** The skin's long-range attachments to the rope are re-routed over the
   cloth that is still connected (cuts and tears included) after every cut, so a piece severed
-  from the rope drops instead of hanging from nothing.
+  from the rope drops instead of hanging from nothing. Cutting a particle also kills its edges,
+  and a bending spring only acts while both of its triangles are intact, so no spring can bridge
+  even the thinnest cut or rip.
+- **Cloth comes to rest.** The skin resists compression as stiffly as stretching (it still
+  buckles into folds via the soft bending), and sheet contacts fade out towards the rim of each
+  cloth particle's disk. Crumpled cloth on the floor or the pile then settles instead of
+  twitching or being kicked upwards.
 - **Heartbeat**: blood inside the body sees a pulsing lower rest density, so wounds spurt.
 
 **Rendering**:
@@ -132,6 +138,9 @@ tests/                 headless-Chrome harness (needs Chrome installed; uses you
 npm run smoke                                   # load each scene, slash it, save screenshots to tests/out
 node tests/probe.mjs sand "set=substeps:16" 64000 4   # physics stats over time (leaks, tears, compression, jitter)
 KERNELS=1 node tests/perf.mjs sand 64000 ""     # GPU ms per kernel and per render pass
+node tests/thincut.mjs sand                     # one-row ring cut: the lower piece must reach the floor
+node tests/clothrest.mjs sand                   # cut-off cloth landing on the pile must settle, not twitch or fly
+node tests/slash.mjs sand                       # mouse-like slashes: no cloth flies upwards
 ```
 
 GPU time per frame on an AMD RDNA2 GPU (simulation + about 1 ms of rendering):

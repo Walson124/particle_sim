@@ -428,12 +428,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
               sgn = 1.0;
             }
             if (dot(cn, cn) < 0.5) { continue; }
-            let side = select(-1.0, 1.0, dot(prevRel, cn) >= 0.0);
+            // A particle that came from (nearly) within the sheet's plane has no meaningful side:
+            // keep the one it is on now. Otherwise a sign flip of that noise would shove it through
+            // the whole sheet thickness in one substep, kicking the cloth (it then rings, or flies).
+            let pd = dot(prevRel, cn);
+            let side = select(select(-1.0, 1.0, pd >= 0.0), select(-1.0, 1.0, dot(rel, cn) >= 0.0), abs(pd) < 0.25 * r);
             let dn = dot(rel, cn) * side;
             let tl = length(rel - dot(rel, cn) * cn);
             if (tl > P.clothDisk) { continue; }
             nrm = cn * (side * sgn);
-            pen = min(d0 - dn, 2.0 * d0);
+            // the disk's rim is rounded off (thickness fades to 0), so a particle sliding in
+            // sideways, e.g. at a fold, is pushed gradually instead of by the full sheet depth at once
+            let th = d0 * (1.0 - smoothstep(0.75 * P.clothDisk, P.clothDisk, tl));
+            pen = min(th - dn, th + d0);
           }
           if (pen > 0.0) {
             if ((fj & GROUNDED) != 0u && kj != KIND_FLUID) { groundedN = true; }
@@ -627,9 +634,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var hopN = HOP_NONE;
   let rg = adjStart[i];
   for (var k = rg.x; k < rg.x + rg.y; k++) {
-    let e = adj[k];
+    let e = adj[2u * k];
+    let w = adj[2u * k + 1u];
     let fj = info[e.x];
     if ((fj & DEAD) != 0u || edgeAlive[e.y] == 0u) { continue; }
+    // both triangles must be intact, or the spring would bridge a cut or a rip
+    if (edgeAlive[w.x] == 0u || edgeAlive[w.y] == 0u || edgeAlive[w.z] == 0u || edgeAlive[w.w] == 0u) { continue; }
     hopN = min(hopN, hopsOf(bitcast<u32>(sleep[e.x].w)) + 1u);
     let d = p.xyz - posNew[e.x].xyz;
     let L = length(d);

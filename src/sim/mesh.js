@@ -235,7 +235,7 @@ export function buildBag(S, spacing, pinAbove) {
     stretch[slot * 4 + 3] = e;
   }
 
-  // Bending constraints: [a, b, rest, edgeId, type] across each shared edge (Jacobi, soft).
+  // Bending constraints: [a, b, rest, edgeId, wings] across each shared edge (Jacobi, soft).
   const cons = [];
   for (let e = 0; e < E; e++) {
     const ts = edgeTris[e];
@@ -248,7 +248,10 @@ export function buildBag(S, spacing, pinAbove) {
       return -1;
     });
     if (opp[0] < 0 || opp[1] < 0 || opp[0] === opp[1]) continue;
-    cons.push([opp[0], opp[1], dist3(positions, opp[0], opp[1]), e, 1]);
+    // the other four edges of the two triangles: the spring only acts while both are intact
+    const wings = [];
+    for (const t of ts) for (let k = 0; k < 3; k++) if (triEdges[t * 4 + k] !== e) wings.push(triEdges[t * 4 + k]);
+    cons.push([opp[0], opp[1], dist3(positions, opp[0], opp[1]), e, wings]);
   }
 
   // Per-vertex constraint lists (CSR) so the GPU solves each vertex without atomics.
@@ -257,15 +260,16 @@ export function buildBag(S, spacing, pinAbove) {
   const adjStart = new Uint32Array(V * 2);
   let off = 0;
   for (let v = 0; v < V; v++) { adjStart[v * 2] = off; adjStart[v * 2 + 1] = 0; off += deg[v]; }
-  const adj = new Uint32Array(Math.max(off, 1) * 4);
-  for (const [a, b, rest, e, type] of cons) {
+  // two vec4u per entry: [neighbour, shared edge, rest, -], [4 wing edges]
+  const adj = new Uint32Array(Math.max(off, 1) * 8);
+  for (const [a, b, rest, e, wings] of cons) {
     f32[0] = rest;
     for (const [i, j] of [[a, b], [b, a]]) {
       const slot = adjStart[i * 2] + adjStart[i * 2 + 1]++;
-      adj[slot * 4] = j;
-      adj[slot * 4 + 1] = e;
-      adj[slot * 4 + 2] = u32[0];
-      adj[slot * 4 + 3] = type;
+      adj[slot * 8] = j;
+      adj[slot * 8 + 1] = e;
+      adj[slot * 8 + 2] = u32[0];
+      for (let k = 0; k < 4; k++) adj[slot * 8 + 4 + k] = wings[k];
     }
   }
 

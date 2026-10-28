@@ -30,7 +30,9 @@ export const PRESETS = {
     contactDamp: 0.7, // inelastic grain contacts
     stretchK: 1.0,
     bendK: 0.08,
-    compressK: 0.2,
+    // as stiff in compression as in stretch: soft compression lets crumpled cloth (lying on the
+    // floor or the pile) run a stretch/compress relaxation cycle and never stop twitching
+    compressK: 1.0,
     tear: 1.65,
     clothInvMass: 0.3,
     clothIters: 4,
@@ -67,7 +69,7 @@ export const PRESETS = {
     contactDamp: 0.3,
     stretchK: 1.0,
     bendK: 0.1,
-    compressK: 0.25,
+    compressK: 1.0,
     tear: 1.5,
     clothInvMass: 0.15, // heavy, stiff sack: the rim of a slumped sack carries all the hoop stress
     clothIters: 7,
