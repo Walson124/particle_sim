@@ -56,6 +56,8 @@ export const PRESETS = {
     // a sack draining through a cut moves slowly inside: grains must be still for longer before they
     // sleep, or the pile behind the wound freezes and the flow stops
     sleepTime: 2,
+    // the slow drain through a slit needs the contact pushes to carry kernels out of it
+    vSepMax: 0.25,
     pinAbove: 0,
     fillTop: 0.78,
     rope: false,

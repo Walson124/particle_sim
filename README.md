@@ -83,9 +83,12 @@ Robustness details that make it hold together:
   open under load, but intact cloth never ruptures by itself.
 - **Substeps scale with particle count** (about N^0.23), so deep piles stay nearly incompressible.
 - **No flinging.** Contacts always resolve overlap completely, but the outward speed they may add
-  is capped (0.25 m/s along the push). Grains packed under load no longer spring out of a fresh
-  cut or bounce off the pile, while stopping on impact and riding along with moving cloth work
-  as before. The excess velocity is removed in the next substep, so positions stay correct.
+  is capped (0.05 m/s along the push; 0.25 m/s for rice, whose slow drain through a slit needs
+  the pushes). Grains packed under load no longer spring out of a fresh cut or bounce off the
+  pile, and a grain wedged into too small a gap (e.g. against cloth lying in the pile) settles
+  instead of bouncing out and back every substep and flickering. Stopping on impact and riding
+  along with moving cloth work as before. The excess velocity is removed in the next substep, so
+  positions stay correct.
 - **Sleeping.** A supported particle (on the floor, on grounded grains, or, for skin, connected
   through the fabric to skin that is) that stays within about 1 mm of one spot for a while falls
   asleep: it freezes, skips the neighbour search and acts as immovable support. It wakes on a
