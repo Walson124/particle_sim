@@ -254,11 +254,10 @@ const WG: u32 = ${wg}u;
     f[53] = c.vWake ?? 0.3;
     // sleeping is a granular thing: fluids never sleep
     f[54] = c.kind === 'fluid' ? 1e9 : Math.round((c.sleepTime ?? 0.25) * 60 * sub);
-    // (low: a grain wedged into too small a gap, e.g. against cloth lying in the pile, would
-    // otherwise keep bouncing out at this speed and back every substep, flickering forever)
-    f[55] = c.vSepMax ?? 0.05;
+    f[55] = c.vSepMax ?? 0.25;
     // ... and for what only the hanging bag holds up (it may still be draining through a slit)
     f[56] = c.kind === 'fluid' ? 1e9 : Math.round(Math.max(c.sleepTime ?? 0.25, c.hangSleepTime ?? 1) * 60 * sub);
+    f[57] = c.clothInvMassFree ?? c.clothInvMass;
     this.device.queue.writeBuffer(this.buf.P, 0, this.paramsData);
   }
 

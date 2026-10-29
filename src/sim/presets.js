@@ -35,6 +35,9 @@ export const PRESETS = {
     compressK: 1.0,
     tear: 1.65,
     clothInvMass: 0.3,
+    // ... but only while it hangs: cut loose or dropped it weighs like sand, or it keeps sinking
+    // into the pile and the sand around it never settles
+    clothInvMassFree: 1.0,
     clothIters: 4,
     clothSor: 1.5,
     anchorK: 0.0,
@@ -56,8 +59,6 @@ export const PRESETS = {
     // a sack draining through a cut moves slowly inside: grains must be still for longer before they
     // sleep, or the pile behind the wound freezes and the flow stops
     sleepTime: 2,
-    // the slow drain through a slit needs the contact pushes to carry kernels out of it
-    vSepMax: 0.25,
     pinAbove: 0,
     fillTop: 0.78,
     rope: false,

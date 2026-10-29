@@ -20,7 +20,7 @@ struct Params {
   clothSor: f32, boundaryPsi: f32, fluidOmega: f32, fluidMaxStep: f32,
   clothDisk: f32, contactDamp: f32, maxCorr: f32, wakeAll: f32,
   sleepTol: f32, vWake: f32, sleepSteps: f32, vSepMax: f32,
-  sleepStepsHung: f32, pad5: f32, pad6: f32, pad7: f32,
+  sleepStepsHung: f32, clothInvMassFree: f32, pad6: f32, pad7: f32,
 };
 
 const KIND_GRAIN: u32 = 0u;
@@ -55,6 +55,15 @@ fn invMassOf(f: u32) -> f32 {
   if ((f & PINNED) != 0u) { return 0.0; }
   if ((f & 3u) == KIND_CLOTH) { return P.clothInvMass; }
   return 1.0;
+}
+
+// Mass as contacts see it (f: sorted flags). Heavy skin keeps a hanging bag from bulging under its
+// contents, but cloth that is no longer hanging (cut loose, dropped, lying on the pile) weighs
+// like the grains it rests on: a heavy sheet on light grains pushes them aside every substep and
+// keeps sinking, so the sand around it never settles.
+fn contactInvMassOf(f: u32) -> f32 {
+  if ((f & (3u | PINNED | HUNG)) == KIND_CLOTH) { return P.clothInvMassFree; }
+  return invMassOf(f);
 }
 
 fn cellOf(p: vec3f) -> vec3i { return vec3i(floor(p / P.cellSize)); }
@@ -340,7 +349,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let xi = a.xyz;
   let da = sortedDisp[s];
   let fi = bitcast<u32>(da.w);
-  let wi = invMassOf(fi);
+  let wi = contactInvMassOf(fi);
   let ki = fi & 3u;
   vfix[i] = vec4f(0.0); // @grain
   if (wi == 0.0) { posNew[i] = vec4f(xi, 0.0); sleep[i] = vec4f(0.0, 0.0, 0.0, bitcast<f32>(HOP_NONE << HOP_SHIFT)); return; }
@@ -450,7 +459,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             nrm = cn * (side * sgn);
             // the disk's rim is rounded off (thickness fades to 0), so a particle sliding in
             // sideways, e.g. at a fold, is pushed gradually instead of by the full sheet depth at once
-            let th = d0 * (1.0 - smoothstep(0.75 * P.clothDisk, P.clothDisk, tl));
+            // It is also trimmed to the neighbour search sphere: off the disk's axis the slab would
+            // reach past it, and a grain arriving from the side would find the contact only once
+            // already deep inside it, get shoved out and hop (on resting cloth: forever).
+            let th = min(d0 * (1.0 - smoothstep(0.75 * P.clothDisk, P.clothDisk, tl)), sqrt(max(rng2 - tl * tl, 0.0)));
             pen = min(th - dn, th + d0);
           }
           if (pen > 0.0) {
@@ -463,7 +475,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             if (b.y < xi.y - 0.25 * r || kj == KIND_CLOTH) { supported = true; }
             if ((fj & MOVING) != 0u && kj != KIND_CLOTH) { stirred = true; }
             // sleeping neighbours are immovable support
-            let wj = select(invMassOf(fj), 0.0, (fj & ASLEEP) != 0u);
+            let wj = select(contactInvMassOf(fj), 0.0, (fj & ASLEEP) != 0u);
             let fr = wi / (wi + wj);
             var corr = nrm * (pen * fr);
             // Coulomb friction on the relative tangential displacement of this substep
@@ -530,8 +542,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let grounded = direct || hops < HOP_NONE;
   // Held up only by the hanging bag (not the floor): such sand must be still for longer before it
   // sleeps. A bag drains through a slit ever more slowly, and contents that dozed off would roof
-  // the slit over and stop the flow. (Skin learns from finalize() whether its rope still holds it.)
-  let hungI = grounded && !onFloor && !floorN && (groundedN || (ki == KIND_CLOTH && (st & S_HUNG) != 0u));
+  // the slit over and stop the flow. Skin learns only from finalize() whether its rope still holds
+  // it (were it also hung by touching hung sand, a falling bag would keep itself "hanging").
+  let hungI = grounded && !onFloor && !floorN && select(groundedN, (st & S_HUNG) != 0u, ki == KIND_CLOTH);
   var counter = 0u;
   // Cloth is judged on where its constraints left it last substep: x here is mid-solve (a contact
   // push that stretch then undoes) and would keep resetting the still period of resting cloth.
@@ -704,11 +717,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let hung = pin != EMPTY && (info[pin] & (PINNED | DEAD)) == PINNED;
   // support through the fabric: one hop further than the best-supported neighbour
   let sw = sleep[i];
-  let word = bitcast<u32>(sw.w);
+  var word = (bitcast<u32>(sw.w) & ~S_HUNG) | select(0u, S_HUNG, hung);
   if (hopsOf(word) != 0u) {
     let hops = select(min(hopN, HOP_NONE), 0u, hung);
-    sleep[i] = vec4f(sw.xyz, bitcast<f32>((word & ~(HOP_MASK | S_HUNG)) | (hops << HOP_SHIFT) | select(0u, S_HUNG, hung)));
+    word = (word & ~HOP_MASK) | (hops << HOP_SHIFT);
   }
+  sleep[i] = vec4f(sw.xyz, bitcast<f32>(word));
 
   if (hung) {
     let l = restLra[2u * i + 1u];

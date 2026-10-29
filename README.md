@@ -83,12 +83,9 @@ Robustness details that make it hold together:
   open under load, but intact cloth never ruptures by itself.
 - **Substeps scale with particle count** (about N^0.23), so deep piles stay nearly incompressible.
 - **No flinging.** Contacts always resolve overlap completely, but the outward speed they may add
-  is capped (0.05 m/s along the push; 0.25 m/s for rice, whose slow drain through a slit needs
-  the pushes). Grains packed under load no longer spring out of a fresh cut or bounce off the
-  pile, and a grain wedged into too small a gap (e.g. against cloth lying in the pile) settles
-  instead of bouncing out and back every substep and flickering. Stopping on impact and riding
-  along with moving cloth work as before. The excess velocity is removed in the next substep, so
-  positions stay correct.
+  is capped (0.25 m/s along the push). Grains packed under load no longer spring out of a fresh
+  cut or bounce off the pile, while stopping on impact and riding along with moving cloth work
+  as before. The excess velocity is removed in the next substep, so positions stay correct.
 - **Sleeping.** A supported particle (on the floor, on grounded grains, or, for skin, connected
   through the fabric to skin that is) that stays within about 1 mm of one spot for a while falls
   asleep: it freezes, skips the neighbour search and acts as immovable support. It wakes on a
@@ -111,7 +108,13 @@ Robustness details that make it hold together:
 - **Cloth comes to rest.** The skin resists compression as stiffly as stretching (it still
   buckles into folds via the soft bending), and sheet contacts fade out towards the rim of each
   cloth particle's disk. Crumpled cloth on the floor or the pile then settles instead of
-  twitching or being kicked upwards.
+  twitching or being kicked upwards. The disk's slab is also trimmed to the neighbour search
+  sphere, so a grain arriving from the side meets the contact at zero depth instead of finding it
+  already deep inside, being shoved out and hopping on resting cloth forever (the sand around a
+  half-buried piece used to glitch like that). And skin is heavy (it holds a hanging bag's
+  contents) only while it hangs from the rope: cut loose or dropped it weighs like the sand, since
+  a heavy sheet on light grains keeps pushing them aside and sinks, so the sand around a dropped
+  sack would never settle.
 - **Heartbeat**: blood inside the body sees a pulsing lower rest density, so wounds spurt.
 
 **Rendering**:
